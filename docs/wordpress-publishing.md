@@ -9,6 +9,10 @@ This repository publishes article files to WordPress with the GitHub Actions wor
 
 The workflow does not delete WordPress posts when article files are removed.
 
+## Codex Cloud direct draft publishing
+
+Future product article tasks should use direct Codex-to-WordPress draft publishing instead of pull request automation. See `docs/codex-direct-wordpress.md` for the required Codex Environment variables and the `scripts/codex_publish_article.py` command.
+
 ## Required configuration
 
 Add these GitHub Actions secrets. Do not commit their values.
