@@ -1,27 +1,27 @@
-name: Codex-impplession
+name: ルアー記事を自動生成
+run-name: ${{ inputs.product_name }} の記事を生成
 
-'on':
+on:
   workflow_dispatch:
     inputs:
       product_name:
-        description: '記事にする正式な商品名・モデル名（例: SCHNEIDER 13）'
+        description: 商品名・ルアー名
         required: true
         type: string
       official_product_url:
-        description: 'メーカー公式の商品ページURL'
+        description: 公式商品ページURL
         required: true
         type: string
       article_slug:
-        description: '保存ファイル名に使う半角英小文字・数字・ハイフン（例: schneider-13）'
+        description: 保存用スラッグ
         required: true
         type: string
       extra_notes:
-        description: '対象魚・想定読者などの追加条件（任意）'
+        description: 追加指示
         required: false
-        default: ''
         type: string
       create_pull_request:
-        description: '生成後に articles/<slug>.md を追加するPRを作成する'
+        description: Pull Requestを作成する
         required: true
         default: true
         type: boolean
