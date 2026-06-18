@@ -189,7 +189,7 @@ jobs:
           sandbox: workspace-write
           safety-strategy: drop-sudo
           effort: high
-codex-args: '["-c", "web_search=\"live\"", "--ephemeral"]'
+　　　　　　codex-args: '["-c", "web_search=\"live\"", "--ephemeral"]'
 
       - name: 出力を整形
         shell: bash
