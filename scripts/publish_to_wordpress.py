@@ -9,6 +9,7 @@ import html.parser
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -65,6 +66,13 @@ def wordpress_error_message(exc: urllib.error.HTTPError) -> str:
         return payload[:1000] or exc.reason
     except Exception:
         return str(exc.reason)
+
+
+def normalize_base_url(base_url: str, *, require_https: bool = True) -> str:
+    normalized = re.sub(r"[\x00-\x20\x7f]+", "", base_url).rstrip("/")
+    if require_https and normalized and not normalized.startswith("https://"):
+        raise ValueError("WP_BASE_URL must start with https://")
+    return normalized
 
 
 def request_json(url: str, method: str, auth_header: str, payload: dict | None = None) -> dict | list:
@@ -165,7 +173,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    args.base_url = args.base_url.rstrip("/")
+    args.base_url = normalize_base_url(args.base_url, require_https=not args.dry_run)
     files = html_paths(args.articles)
     if not files:
         print("No existing articles/*.html files to publish.")
