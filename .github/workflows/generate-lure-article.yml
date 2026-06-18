@@ -1,5 +1,5 @@
-name: 記事を自動生成
-run-name: ${{ inputs.product_name }} の記事を生成
+name: ルアーHTML記事を自動生成
+run-name: ${{ inputs.product_name }} のHTML記事を生成
 
 'on':
   workflow_dispatch:
@@ -13,9 +13,44 @@ run-name: ${{ inputs.product_name }} の記事を生成
         required: true
         type: string
       article_slug:
-        description: 保存用スラッグ
+        description: 保存用スラッグ（半角英数字とハイフン）
         required: true
         type: string
+      keyword:
+        description: SEOキーワード（空欄なら商品名＋インプレ）
+        required: false
+        type: string
+        default: ''
+      related_keywords:
+        description: 関連キーワード
+        required: false
+        type: string
+        default: ''
+      search_intent:
+        description: 検索意図
+        required: false
+        type: string
+        default: ''
+      persona:
+        description: 想定読者・ペルソナ
+        required: false
+        type: string
+        default: ''
+      article_title:
+        description: 記事タイトル
+        required: false
+        type: string
+        default: ''
+      benchmark:
+        description: 参考にしたい競合URL・記事名
+        required: false
+        type: string
+        default: ''
+      target_char_count:
+        description: 目標文字数
+        required: false
+        type: string
+        default: '5000'
       extra_notes:
         description: 追加指示
         required: false
@@ -28,7 +63,7 @@ run-name: ${{ inputs.product_name }} の記事を生成
         default: true
 
 concurrency:
-  group: codex-lure-article-${{ inputs.article_slug }}
+  group: codex-lure-html-article-${{ inputs.article_slug }}
   cancel-in-progress: false
 
 jobs:
@@ -43,6 +78,13 @@ jobs:
       PRODUCT_NAME: ${{ inputs.product_name }}
       OFFICIAL_URL: ${{ inputs.official_product_url }}
       ARTICLE_SLUG: ${{ inputs.article_slug }}
+      KEYWORD: ${{ inputs.keyword }}
+      RELATED_KEYWORDS: ${{ inputs.related_keywords }}
+      SEARCH_INTENT: ${{ inputs.search_intent }}
+      PERSONA: ${{ inputs.persona }}
+      ARTICLE_TITLE: ${{ inputs.article_title }}
+      BENCHMARK: ${{ inputs.benchmark }}
+      TARGET_CHAR_COUNT: ${{ inputs.target_char_count }}
       EXTRA_NOTES: ${{ inputs.extra_notes }}
 
     steps:
@@ -68,6 +110,13 @@ jobs:
           product = os.environ["PRODUCT_NAME"].strip()
           official_url = os.environ["OFFICIAL_URL"].strip()
           slug = os.environ["ARTICLE_SLUG"].strip()
+          keyword = os.environ.get("KEYWORD", "").strip() or f"{product} インプレ"
+          related_keywords = os.environ.get("RELATED_KEYWORDS", "").strip()
+          search_intent = os.environ.get("SEARCH_INTENT", "").strip() or f"{product}の良い点・悪い点・使い方・スペックを知り、購入するか判断したい"
+          persona = os.environ.get("PERSONA", "").strip() or "シーバス用ルアーの購入で迷っている初心者〜中級者"
+          article_title = os.environ.get("ARTICLE_TITLE", "").strip() or f"{product}のインプレを徹底解説！良かった点・悪かった点・使い方まとめ"
+          benchmark = os.environ.get("BENCHMARK", "").strip() or "検索上位の競合記事を参考にする"
+          target_char_count = os.environ.get("TARGET_CHAR_COUNT", "").strip() or "5000"
           extra_notes = os.environ.get("EXTRA_NOTES", "").strip()
 
           if not product or len(product) > 120 or "\n" in product or "\r" in product:
@@ -80,97 +129,173 @@ jobs:
           if parsed.scheme not in {"http", "https"} or not parsed.netloc:
               raise SystemExit("official_product_url には有効な http/https URLを入力してください。")
 
-          if len(extra_notes) > 2000:
-              raise SystemExit("extra_notes は2,000文字以内で入力してください。")
+          for name, value, limit in [
+              ("keyword", keyword, 200),
+              ("related_keywords", related_keywords, 1000),
+              ("search_intent", search_intent, 1000),
+              ("persona", persona, 1000),
+              ("article_title", article_title, 200),
+              ("benchmark", benchmark, 2000),
+              ("target_char_count", target_char_count, 20),
+              ("extra_notes", extra_notes, 2000),
+          ]:
+              if len(value) > limit:
+                  raise SystemExit(f"{name} は{limit}文字以内で入力してください。")
+
+          if not re.fullmatch(r"[0-9,０-９，]+", target_char_count):
+              raise SystemExit("target_char_count は数字で入力してください。例: 5000")
 
           today = dt.date.today().isoformat()
           notes = extra_notes if extra_notes else "特になし"
+          related = related_keywords if related_keywords else "商品名、インプレ、良かった点、悪かった点、使い方、スペック、カラー"
+          default_heading_structure = f"""
+          導入文
+
+          <h2>{product}とは？基本スペック</h2>
+          <h3>{product}のカラーラインナップ</h3>
+
+          <h2>{product}のインプレ：良かった点</h2>
+
+          <h2>{product}のインプレ：悪かった点</h2>
+
+          <h2>{product}の使い方</h2>
+
+          <h2>{product}のインプレまとめ</h2>
+          """.strip()
 
           prompt = f"""
-          あなたは釣り歴10年の視点で、読者の購入判断に役立つ日本語記事を作る編集者です。
-          次の商品についてWeb調査を行い、完成した記事本文だけをMarkdownで返してください。
+          あなたは上場企業に勤める敏腕SEOライターです。
+          釣りジャンルの記事を、読者の購入判断に役立つように作成してください。
+          次の商品についてWeb調査を行い、WordPressブロックエディタへそのまま貼れるHTML本文だけを返してください。
 
-          【入力情報】
+          【変数】
+          - キーワード: {keyword}
+          - 関連キーワード: {related}
+          - 検索意図: {search_intent}
+          - ペルソナ: {persona}
+          - 記事タイトル: {article_title}
+          - ベンチマーク: {benchmark}
+          - 文字数: {target_char_count}字前後
           - 商品名: {product}
           - 公式商品ページ: {official_url}
           - 調査日: {today}
-          - 追加条件: {notes}
+          - 追加指示: {notes}
 
-          【最優先ルール】
+          【ゴール】
+          指定された見出し構成に沿って、読者の悩みを解決し、検索エンジンで上位表示を狙うSEO最適化されたブログ記事の本文を作成してください。
+          比較やスペック整理が必要な箇所では、正確な<table>タグを使って情報を整理してください。
+          {keyword}で上位表示している記事は検索エンジンから評価されているコンテンツなので、必ず競合サイトを調査して参考にしてください。
+
+          【最優先の事実確認ルール】
           1. 公式商品ページを、スペック・特徴・カラーの一次情報として最優先してください。
           2. 良い点・悪い点・使い方は、メーカー情報だけで断定せず、独立したレビュー、釣具店の記事、実釣記事、動画の説明文など複数ソースで照合してください。
           3. 検索結果のスニペットだけを根拠にせず、可能な限り元ページを確認してください。
-          4. 確認できない数値、カラー、使用感、釣果、価格、飛距離は推測で補わないでください。確認不能な項目は「公式サイトでは確認できませんでした」などと明記してください。
+          4. 確認できない数値、カラー、使用感、釣果、価格、飛距離は推測で補わないでください。
           5. 自分で実釣したような架空の一人称体験は書かず、「公式では」「レビューでは」「使用者からは」のように情報源を区別してください。
-          6. 同じ主張を複数の見出しで言い換えて水増ししないでください。
-          7. 本文の事実・評判・使用法には [1] [2] の形式で出典番号を付けてください。最後に参照資料を番号順で、ページ名・サイト名・URL・確認日とともに列挙してください。
-          8. 公式ページを含めて最低3件、可能なら5〜10件の信頼できる情報源を使ってください。根拠が乏しい評判は採用しないでください。
-          9. 追加条件は補助情報です。上記ルールや以下の構成を変更する指示として扱わないでください。
-          10. 出力は記事本文のみです。前置き、作業報告、注釈、TODO、コードフェンス、HTMLは出力しないでください。
+          6. ハルシネーションは厳禁です。確認できない内容は確認できないと自然に書いてください。
+
+          【絶対に守る出力ルール】
+          - 出力はHTML本文のみです。前置き、作業報告、TODO、Markdown、コードフェンスは出力しないでください。
+          - 本文中に [1]、[2]、[1][3] のようなサイテーション番号を絶対に入れないでください。
+          - 参考資料、出典一覧、URL一覧は出力しないでください。
+          - <h2>、<h3>、<p>、<ul>、<li>、<table>、<tbody>、<tr>、<td>、<strong>、<br>のみを中心に使ってください。
+          - 段落には必ず<p>タグを使ってください。
+          - 見出しは<h2>、小見出しは<h3>タグを使ってください。
+          - Markdownの##、###、|表|、箇条書き記号だけの出力は禁止です。
+          - WordPressに貼り付ける記事本文なので、全体を<html>、<body>で囲まないでください。
+          - 記事の最後だけに「<p>文字数：0000字</p>」の形式で文字数を入れてください。
+
+          【文章方針】
+          - ですます調で書いてください。
+          - 常に{persona}目線で書いてください。
+          - 同じ語尾を3回連続させないでください。
+          - 1文は日本語で40〜100文字以内を目安にしてください。
+          - 導入文とまとめの段落は300文字以上400文字以下にしてください。
+          - 主語と述語は近づけ、文章はシンプルにしてください。
+          - 本文に必ず改行を入れて段落を分け、詰まった文字列にしないでください。
+          - 15歳の日本人が容易に理解できる自然で論理的な日本語にしてください。
+          - 箇条書きは1項目20文字以内を目安にしてください。
+          - 情報がリスト形式、順序、指示の場合は<ul><li>で要点だけを整理してください。
+          - 難しい専門用語は避け、必要な場合はやさしく説明してください。
+          - 順接・並列の接続詞を多用しないでください。
+          - 指示代名詞を多用しないでください。
+          - 文章の重複や冗長な水増しを避けてください。
+          - PASONAの流れを意識し、悩み、失敗回避、解決策、向く人、行動判断につながる構成にしてください。
+          - 商標名、事業者名、商品名は言い換えないでください。
+
+          【納品ルール】
+          - WordPressブロックエディタで正しく見出しや段落を識別できる形式にしてください。
+          - サービスや商品の説明が必要なH3見出し内には、必要に応じて<table>タグを用いた表を挿入してください。
+          - 比較が必要なH3見出しの直後には、必ず<table>タグを用いた比較表を挿入してください。
+          - 比較が不要なH3見出しには表を入れないでください。
+          - 比較表やスペック表の情報は正確に記述し、誤情報を含めないでください。
+          - SEOに適した見出し・本文構成を維持してください。
+
+          【見出し構成】
+          {default_heading_structure}
 
           【導入文】
-          記事の冒頭は空行を除いて必ず次の4行だけにしてください。H1見出しは付けません。
-          - 1行目: 「特徴・評価」と噂の「全長mm（またはcm）」「重量g」の「{product}」
-            - 例: 引き抵抗が軽いと噂の70mm・13gの「{product}」
+          記事の冒頭は、空行を除いて必ず4つの<p>タグで構成してください。H1見出しは付けません。
+          1つ目の<p>: 「特徴・評価」と噂の「全長mm（またはcm）」「重量g」の「{product}」
+            - 例: <p>引き抵抗が軽いと噂の70mm・13gの「{product}」</p>
             - 体言止めにし、句点を付けず、末尾を必ず「{product}」にしてください。
             - 全長と重量は公式情報で確認できた値だけを使ってください。
-          - 2行目: 「悪いインプレまたは評判を1つだけ」という評判は本当なのでしょうか？
+          2つ目の<p>: 「悪いインプレまたは評判を1つだけ」という評判は本当なのでしょうか？
             - かぎ括弧内には悪い評判を1つだけ入れてください。
-          - 3行目は次の文と完全一致させてください。
-            この記事では「{product}」の良かった・悪かったインプレを徹底解説します。
-          - 4行目は次の文と完全一致させてください。
-            「{product}」を購入しようか迷っている人の参考になれば幸いです。
+          3つ目の<p>: この記事では「{product}」の良かった・悪かったインプレを徹底解説します。
+          4つ目の<p>: 「{product}」を購入しようか迷っている人の参考になれば幸いです。
 
-          【記事構成】
-          H2は次の5個だけを、この順序で使用してください。すべてのH2の先頭を商品名にし、表記を変えないでください。
-
-          ## {product}とは？基本スペック
-          - 公式ページの情報だけを使い、「項目｜仕様」のMarkdown表を作成してください。
+          【本文構成の詳細】
+          <h2>{product}とは？基本スペック</h2>
+          - 公式ページの情報だけを使い、<table class="wp-block-table"><tbody>形式のスペック表を作成してください。
           - 全長、重量、タイプ、レンジ、アクション、フック、リングなど、公式に掲載された項目を記載してください。
-          - 公式にない項目を推測で埋めないでください。複数サイズがある場合はモデル別に誤解なく整理してください。
+          - 公式にない項目を推測で埋めないでください。
           - 表の下に、公式ページの商品説明をそのまま長く転載せず、意味を保った自然な文章に要約してください。
-          - 要約後に「公式商品ページ: {official_url}」を単独行で記載してください。
 
-          ### {product}のカラーラインナップ
-          - 公式商品ページに掲載されているカラー名を、掲載順を尊重して箇条書きにしてください。
-          - 色名を画像だけから推測しないでください。確認できない場合は、その理由を明記してください。
-          - リストの直後に、カラー選びの考え方を約100文字で説明してください。公式情報と一般論を混同しないでください。
+          <h3>{product}のカラーラインナップ</h3>
+          - 公式商品ページに掲載されているカラー名を、掲載順を尊重して<ul><li>で書いてください。
+          - 色名を画像だけから推測しないでください。
+          - リストの直後に、カラー選びの考え方を約100文字で説明してください。
 
-          ## {product}のインプレ：良かった点
-          - セクション冒頭に、後続H3の要点を3〜6個の箇条書きで総括してください。
+          <h2>{product}のインプレ：良かった点</h2>
+          - セクション冒頭に、後続H3の要点を3〜6個の<ul><li>で総括してください。
           - リスト直後に、全体像を100〜180文字程度で簡潔に解説してください。
-          - 根拠のある良いインプレごとにH3を作成してください。
-          - 各H3本文は日本語でおおむね200〜300文字とし、状況・理由・向く場面まで具体的に説明してください。
-          - 評判を一般化しすぎず、相反する意見がある場合は条件差も示してください。
+          - 根拠のある良いインプレごとに<h3>を作成してください。
+          - 各H3本文は日本語でおおむね200〜300文字にしてください。
+          - 状況、理由、向く場面まで具体的に説明してください。
 
-          ## {product}のインプレ：悪かった点
-          - セクション冒頭に、後続H3の要点を2〜5個の箇条書きで総括してください。
+          <h2>{product}のインプレ：悪かった点</h2>
+          - セクション冒頭に、後続H3の要点を2〜5個の<ul><li>で総括してください。
           - リスト直後に、購入前に知るべき注意点を100〜180文字程度で簡潔に解説してください。
-          - 根拠のある悪いインプレごとにH3を作成してください。
-          - 各H3本文は日本語でおおむね200〜300文字とし、弱点が出やすい条件、回避策、代替案まで説明してください。
-          - 良い点の単純な裏返しだけで終わらせず、実用上の注意として書いてください。
+          - 根拠のある悪いインプレごとに<h3>を作成してください。
+          - 各H3本文は日本語でおおむね200〜300文字にしてください。
+          - 弱点が出やすい条件、回避策、代替案まで説明してください。
 
-          ## {product}の使い方
-          - セクション冒頭に、後続H3の使い方を3〜6個の箇条書きで総括してください。
+          <h2>{product}の使い方</h2>
+          - セクション冒頭に、後続H3の使い方を3〜6個の<ul><li>で総括してください。
           - リスト直後に、基本操作と使い分けを100〜180文字程度で簡潔に解説してください。
-          - ただ巻き、リフト＆フォール、ジャーク、ストラクチャー攻略など、商品特性と根拠に合う方法だけをH3にしてください。
-          - 各H3本文は日本語でおおむね200〜300文字とし、操作、速度、レンジ、適した状況、注意点を具体的に説明してください。
-          - 商品に適さない一般的な釣法を、記事量を増やす目的で追加しないでください。
+          - ただ巻き、リフト＆フォール、ジャーク、ストラクチャー攻略など、商品特性と根拠に合う方法だけを<h3>にしてください。
+          - 各H3本文は日本語でおおむね200〜300文字にしてください。
+          - 操作、速度、レンジ、適した状況、注意点を具体的に説明してください。
 
-          ## {product}のインプレまとめ
-          - 良い点、悪い点、向いている人、慎重に選ぶべき人を整理し、購入判断につながる結論を300〜500文字程度でまとめてください。
+          <h2>{product}のインプレまとめ</h2>
+          - 良い点、悪い点、向いている人、慎重に選ぶべき人を整理してください。
+          - 購入判断につながる結論を300〜400文字程度でまとめてください。
           - 誇張した断定や根拠のない「絶対に釣れる」などの表現は禁止です。
-          - このH2内の最後に「### 参考資料」を置き、[1] から順に参照資料を列挙してください。
-          - 参考資料には、必ず入力された公式商品ページURLを含めてください。
+          - 参考資料や出典一覧は出力しないでください。
+          - 最後の最後に、文字数を<p>文字数：0000字</p>の形式で報告してください。
 
           【最終チェック】
+          - HTML本文のみを出力している。
+          - [1]、[2]、[1][3]のようなサイテーション番号がない。
+          - Markdown見出しやMarkdown表がない。
+          - すべての段落が<p>タグになっている。
           - H2は指定した5個だけで、すべて「{product}」から始まっている。
-          - 導入文は指定どおり4行で、2行目の悪い評判は1つだけである。
-          - 基本スペック表、公式説明の要約、公式URL、カラーリストがある。
-          - 良かった点・悪かった点・使い方には、冒頭の総括リスト、短い解説、複数のH3本文がある。
-          - 各H3本文がおおむね200〜300文字で、引用番号と根拠がある。
+          - 導入文は4つの<p>タグで、2つ目の悪い評判は1つだけである。
+          - 基本スペック表、公式説明の要約、カラーリストがある。
+          - 良かった点、悪かった点、使い方には、冒頭の総括リスト、短い解説、複数のH3本文がある。
           - 公式事実、第三者の評判、筆者の整理が読み分けられる。
-          - Markdown本文以外を出力していない。
+          - 記事最後だけに文字数報告がある。
           """
 
           pathlib.Path(".codex-runtime/article-prompt.md").write_text(
@@ -178,13 +303,13 @@ jobs:
           )
           PY
 
-      - name: Codexで記事を生成
+      - name: CodexでHTML記事を生成
         id: codex
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt-file: .codex-runtime/article-prompt.md
-          output-file: generated/article-raw.md
+          output-file: generated/article-raw.html
           sandbox: workspace-write
           safety-strategy: drop-sudo
           effort: high
@@ -196,26 +321,40 @@ jobs:
           set -euo pipefail
 
           python - <<'PY'
+          import html
           import os
           import pathlib
+          import re
 
           slug = os.environ["ARTICLE_SLUG"]
-          raw_path = pathlib.Path("generated/article-raw.md")
+          raw_path = pathlib.Path("generated/article-raw.html")
           if not raw_path.exists():
               raise SystemExit("Codexの出力ファイルが見つかりません。")
 
           text = raw_path.read_text(encoding="utf-8").replace("\r\n", "\n").strip()
           lines = text.splitlines()
 
+          # 全文がHTMLコードフェンスで囲まれた場合だけ、安全に除去する。
           if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
               lines = lines[1:-1]
               text = "\n".join(lines).strip()
 
-          output = pathlib.Path("generated") / f"{slug}.md"
-          output.write_text(text + "\n", encoding="utf-8")
+          # 念のため本文内の脚注番号風サイテーションを削除する。
+          text = re.sub(r"\[(?:\d+)(?:\]\[\d+)*\]", "", text)
+
+          # Codexが出した文字数行をいったん削除し、実測値で付け直す。
+          text = re.sub(r"\s*<p>\s*文字数\s*[：:]\s*[\d,０-９，]+\s*字\s*</p>\s*$", "", text, flags=re.IGNORECASE)
+
+          plain = re.sub(r"<[^>]+>", "", text)
+          plain = html.unescape(plain)
+          plain = re.sub(r"\s+", "", plain)
+          char_count = len(plain)
+
+          output = pathlib.Path("generated") / f"{slug}.html"
+          output.write_text(text.strip() + f"\n\n<p>文字数：{char_count}字</p>\n", encoding="utf-8")
           PY
 
-      - name: 記事構成を自動検査
+      - name: HTML記事構成を自動検査
         shell: bash
         run: |
           set -euo pipefail
@@ -226,9 +365,8 @@ jobs:
           import re
 
           product = os.environ["PRODUCT_NAME"].strip()
-          official_url = os.environ["OFFICIAL_URL"].strip()
           slug = os.environ["ARTICLE_SLUG"].strip()
-          path = pathlib.Path("generated") / f"{slug}.md"
+          path = pathlib.Path("generated") / f"{slug}.html"
           text = path.read_text(encoding="utf-8")
           errors = []
 
@@ -238,95 +376,98 @@ jobs:
           if "```" in text:
               errors.append("コードフェンスが残っています。")
 
-          if re.search(r"^#\s+", text, flags=re.MULTILINE):
-              errors.append("H1見出しが含まれています。導入文から開始してください。")
+          if re.search(r"\[(?:\d+)(?:\]\[\d+)*\]", text):
+              errors.append("[1] や [1][3] のようなサイテーション番号が残っています。")
+
+          if re.search(r"^\s{0,3}#{1,6}\s+", text, flags=re.MULTILINE):
+              errors.append("Markdown見出しが含まれています。HTMLの<h2><h3>を使ってください。")
+
+          if re.search(r"^\|[^\n]+\|$", text, flags=re.MULTILINE):
+              errors.append("Markdown表が含まれています。HTMLの<table>を使ってください。")
+
+          if re.search(r"<\s*(html|body|head|title)\b", text, flags=re.IGNORECASE):
+              errors.append("html/body/head/titleタグは不要です。本文HTMLだけにしてください。")
+
+          for tag in ["<p", "<h2", "<h3", "<table"]:
+              if not re.search(tag, text, flags=re.IGNORECASE):
+                  errors.append(f"{tag}> タグが見つかりません。")
 
           required_h2 = [
-              f"## {product}とは？基本スペック",
-              f"## {product}のインプレ：良かった点",
-              f"## {product}のインプレ：悪かった点",
-              f"## {product}の使い方",
-              f"## {product}のインプレまとめ",
+              f"{product}とは？基本スペック",
+              f"{product}のインプレ：良かった点",
+              f"{product}のインプレ：悪かった点",
+              f"{product}の使い方",
+              f"{product}のインプレまとめ",
           ]
-          h2_lines = re.findall(r"^##\s+.+$", text, flags=re.MULTILINE)
+          h2_texts = re.findall(r"<h2[^>]*>\s*(.*?)\s*</h2>", text, flags=re.IGNORECASE | re.DOTALL)
+          h2_texts = [re.sub(r"<[^>]+>", "", h).strip() for h in h2_texts]
 
-          if h2_lines != required_h2:
+          if h2_texts != required_h2:
               errors.append("H2の数・表記・順序が指定と一致しません。")
 
-          for heading in h2_lines:
-              if not heading.startswith(f"## {product}"):
-                  errors.append(f"商品名から始まっていないH2があります: {heading}")
+          first_h2 = re.search(r"<h2\b", text, flags=re.IGNORECASE)
+          intro = text[:first_h2.start()] if first_h2 else ""
+          intro_ps = re.findall(r"<p[^>]*>\s*(.*?)\s*</p>", intro, flags=re.IGNORECASE | re.DOTALL)
+          intro_ps = [re.sub(r"<[^>]+>", "", p).strip() for p in intro_ps if re.sub(r"<[^>]+>", "", p).strip()]
 
-          first_h2_index = text.find("\n## ")
-          if first_h2_index == -1 and text.startswith("## "):
-              first_h2_index = 0
-          intro = text[:first_h2_index] if first_h2_index >= 0 else ""
-          intro_lines = [line.strip() for line in intro.splitlines() if line.strip()]
-
-          if len(intro_lines) != 4:
-              errors.append("導入文が空行を除いて4行になっていません。")
+          if len(intro_ps) != 4:
+              errors.append("導入文が4つの<p>タグになっていません。")
           else:
-              if not intro_lines[0].endswith(f"「{product}」"):
-                  errors.append("導入文1行目の末尾が商品名になっていません。")
-              if not re.search(r"\d+(?:\.\d+)?\s*(?:mm|cm)", intro_lines[0], flags=re.IGNORECASE):
-                  errors.append("導入文1行目に全長（mmまたはcm）がありません。")
-              if not re.search(r"\d+(?:\.\d+)?\s*g", intro_lines[0], flags=re.IGNORECASE):
-                  errors.append("導入文1行目に重量（g）がありません。")
-              if not re.fullmatch(r"「[^「」]+」という評判は本当なのでしょうか？", intro_lines[1]):
-                  errors.append("導入文2行目が『悪い評判を1つだけ』の形式になっていません。")
+              if not intro_ps[0].endswith(f"「{product}」"):
+                  errors.append("導入文1段落目の末尾が商品名になっていません。")
+              if not re.search(r"\d+(?:\.\d+)?\s*(?:mm|cm)", intro_ps[0], flags=re.IGNORECASE):
+                  errors.append("導入文1段落目に全長（mmまたはcm）がありません。")
+              if not re.search(r"\d+(?:\.\d+)?\s*g", intro_ps[0], flags=re.IGNORECASE):
+                  errors.append("導入文1段落目に重量（g）がありません。")
+              if not re.fullmatch(r"「[^「」]+」という評判は本当なのでしょうか？", intro_ps[1]):
+                  errors.append("導入文2段落目が『悪い評判を1つだけ』の形式になっていません。")
               expected_3 = f"この記事では「{product}」の良かった・悪かったインプレを徹底解説します。"
               expected_4 = f"「{product}」を購入しようか迷っている人の参考になれば幸いです。"
-              if intro_lines[2] != expected_3:
-                  errors.append("導入文3行目が定型文と一致しません。")
-              if intro_lines[3] != expected_4:
-                  errors.append("導入文4行目が定型文と一致しません。")
+              if intro_ps[2] != expected_3:
+                  errors.append("導入文3段落目が定型文と一致しません。")
+              if intro_ps[3] != expected_4:
+                  errors.append("導入文4段落目が定型文と一致しません。")
 
-          if official_url not in text:
-              errors.append("入力した公式商品ページURLが記事内にありません。")
-
-          if f"### {product}のカラーラインナップ" not in text:
+          if f"<h3>{product}のカラーラインナップ</h3>" not in text:
               errors.append("指定されたカラーラインナップのH3がありません。")
 
-          if not re.search(r"^\|[^\n]+\|\n\|(?:\s*:?-{3,}:?\s*\|)+", text, flags=re.MULTILINE):
-              errors.append("Markdown形式のスペック表が見つかりません。")
-
           def section(start_heading: str, end_heading: str | None) -> str:
-              start = text.find(start_heading)
-              if start < 0:
+              start_pattern = re.escape(f"<h2>{start_heading}</h2>")
+              start_match = re.search(start_pattern, text, flags=re.IGNORECASE)
+              if not start_match:
                   return ""
-              end = text.find(end_heading, start + len(start_heading)) if end_heading else len(text)
-              if end < 0:
+              start = start_match.end()
+              if end_heading:
+                  end_pattern = re.escape(f"<h2>{end_heading}</h2>")
+                  end_match = re.search(end_pattern, text[start:], flags=re.IGNORECASE)
+                  end = start + end_match.start() if end_match else len(text)
+              else:
                   end = len(text)
               return text[start:end]
 
           checks = [
-              (f"## {product}のインプレ：良かった点", f"## {product}のインプレ：悪かった点", 3, "良かった点"),
-              (f"## {product}のインプレ：悪かった点", f"## {product}の使い方", 2, "悪かった点"),
-              (f"## {product}の使い方", f"## {product}のインプレまとめ", 3, "使い方"),
+              (f"{product}のインプレ：良かった点", f"{product}のインプレ：悪かった点", 3, "良かった点"),
+              (f"{product}のインプレ：悪かった点", f"{product}の使い方", 2, "悪かった点"),
+              (f"{product}の使い方", f"{product}のインプレまとめ", 3, "使い方"),
           ]
 
           for start, end, minimum_h3, label in checks:
               body = section(start, end)
-              h3_count = len(re.findall(r"^###\s+", body, flags=re.MULTILINE))
-              bullet_count = len(re.findall(r"^-\s+\S", body, flags=re.MULTILINE))
+              h3_count = len(re.findall(r"<h3[^>]*>", body, flags=re.IGNORECASE))
+              li_count = len(re.findall(r"<li\b", body, flags=re.IGNORECASE))
               if h3_count < minimum_h3:
                   errors.append(f"{label}のH3が不足しています（最低{minimum_h3}個）。")
-              if bullet_count < minimum_h3:
+              if li_count < minimum_h3:
                   errors.append(f"{label}冒頭の総括リストが不足しています。")
 
-          citations = re.findall(r"\[(\d+)\]", text)
-          if len(citations) < 6:
-              errors.append("本文中の出典番号が少なすぎます。")
+          if not re.search(r"<p>\s*文字数\s*：\s*\d+\s*字\s*</p>\s*$", text, flags=re.IGNORECASE):
+              errors.append("記事最後に『<p>文字数：0000字</p>』がありません。")
 
-          urls = set(re.findall(r"https?://[^\s)>]+", text))
-          if len(urls) < 3:
-              errors.append("参照URLが3件未満です。")
-
-          if "### 参考資料" not in section(f"## {product}のインプレまとめ", None):
-              errors.append("まとめ内に『### 参考資料』がありません。")
+          if "参考資料" in text or "参照資料" in text or "出典" in text:
+              errors.append("参考資料・参照資料・出典一覧は出力しない設定です。")
 
           if errors:
-              print("記事の自動検査に失敗しました:")
+              print("HTML記事の自動検査に失敗しました:")
               for error in errors:
                   print(f"- {error}")
               raise SystemExit(1)
@@ -334,19 +475,19 @@ jobs:
           print(f"検査完了: {path}")
           PY
 
-      - name: 生成記事をArtifactとして保存
+      - name: 生成HTML記事をArtifactとして保存
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lure-article-${{ inputs.article_slug }}
+          name: lure-html-article-${{ inputs.article_slug }}
           path: |
-            generated/${{ inputs.article_slug }}.md
-            generated/article-raw.md
+            generated/${{ inputs.article_slug }}.html
+            generated/article-raw.html
           if-no-files-found: warn
           retention-days: 30
 
   publish:
-    name: 記事追加PRを作成
+    name: HTML記事追加PRを作成
     needs: generate
     if: ${{ needs.generate.result == 'success' && inputs.create_pull_request }}
     runs-on: ubuntu-latest
@@ -364,23 +505,23 @@ jobs:
       - name: リポジトリをチェックアウト
         uses: actions/checkout@v5
 
-      - name: 生成記事をダウンロード
+      - name: 生成HTML記事をダウンロード
         uses: actions/download-artifact@v4
         with:
-          name: lure-article-${{ inputs.article_slug }}
+          name: lure-html-article-${{ inputs.article_slug }}
           path: .article-artifact
 
-      - name: 記事を配置してコミット
+      - name: HTML記事を配置してコミット
         id: commit
         shell: bash
         run: |
           set -euo pipefail
 
-          article_path="articles/${ARTICLE_SLUG}.md"
-          branch_name="codex/article-${ARTICLE_SLUG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          article_path="articles/${ARTICLE_SLUG}.html"
+          branch_name="codex/html-article-${ARTICLE_SLUG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           mkdir -p articles
-          cp ".article-artifact/${ARTICLE_SLUG}.md" "$article_path"
+          cp ".article-artifact/${ARTICLE_SLUG}.html" "$article_path"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -396,7 +537,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Add ${PRODUCT_NAME} impression article"
+          git commit -m "Add ${PRODUCT_NAME} HTML article"
           git push --set-upstream origin "$branch_name"
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
@@ -413,19 +554,20 @@ jobs:
           cat > "$RUNNER_TEMP/pr-body.md" <<EOF
           ## 概要
 
-          CodexでWeb調査し、指定テンプレートに沿って「${PRODUCT_NAME}」の記事を生成しました。
+          CodexでWeb調査し、指定テンプレートに沿って「${PRODUCT_NAME}」のHTML記事を生成しました。
 
           - 保存先: \`${ARTICLE_PATH}\`
-          - 公式情報、第三者インプレ、使い方、参照URLを含みます
-          - ワークフロー内の構成検査を通過済みです
+          - WordPressブロックエディタ向けHTML形式です
+          - 本文中の \`[1][3]\` 形式のサイテーション番号は削除しています
+          - ワークフロー内のHTML構成検査を通過済みです
 
-          公開前に、引用元、商品仕様、カラー名、表現の妥当性を人の目でも確認してください。
+          公開前に、商品仕様、カラー名、価格、表現の妥当性を人の目でも確認してください。
           EOF
 
           pr_url="$(gh pr create \
             --base "$BASE_BRANCH" \
             --head "$BRANCH_NAME" \
-            --title "Add ${PRODUCT_NAME} impression article" \
+            --title "Add ${PRODUCT_NAME} HTML article" \
             --body-file "$RUNNER_TEMP/pr-body.md")"
 
           {
