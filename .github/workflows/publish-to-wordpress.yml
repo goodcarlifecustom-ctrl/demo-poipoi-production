@@ -1,0 +1,86 @@
+name: Publish articles to WordPress
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'articles/*.html'
+      - 'articles/*.json'
+  workflow_dispatch:
+    inputs:
+      status:
+        description: 'Post status override for this run'
+        required: true
+        default: preserve
+        type: choice
+        options:
+          - preserve
+          - draft
+          - pending
+          - publish
+      dry_run:
+        description: 'Validate files without sending to WordPress'
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      WP_BASE_URL: ${{ secrets.WP_BASE_URL }}
+      WP_USERNAME: ${{ secrets.WP_USERNAME }}
+      WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+      WP_NEW_POST_STATUS: ${{ vars.WP_NEW_POST_STATUS || 'draft' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Detect changed article files
+        id: changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'articles/*.html' 'articles/*.json' > /tmp/article-files.txt
+          else
+            find articles -maxdepth 1 -type f \( -name '*.html' -o -name '*.json' \) | sort > /tmp/article-files.txt || true
+          fi
+          existing_html=()
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            if [[ "$file" == *.json ]]; then
+              file="${file%.json}.html"
+            fi
+            if [[ -f "$file" ]]; then
+              existing_html+=("$file")
+            fi
+          done < /tmp/article-files.txt
+          printf '%s\n' "${existing_html[@]}" | sort -u > /tmp/article-html-files.txt
+          cat /tmp/article-html-files.txt
+
+      - name: Publish changed articles
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -s /tmp/article-html-files.txt ]]; then
+            echo "No existing article HTML files to publish."
+            exit 0
+          fi
+          args=(scripts/publish_to_wordpress.py --status "${{ github.event.inputs.status || 'preserve' }}")
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          mapfile -t files < /tmp/article-html-files.txt
+          python "${args[@]}" "${files[@]}"
