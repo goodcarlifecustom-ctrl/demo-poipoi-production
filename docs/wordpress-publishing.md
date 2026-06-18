@@ -5,7 +5,7 @@ This repository publishes article files to WordPress with the GitHub Actions wor
 ## When it runs
 
 - Automatically on pushes to `main` that change `articles/*.html` or `articles/*.json`.
-- Manually from **Actions → Publish articles to WordPress → Run workflow**.
+- Manually from **Actions → Publish articles to WordPress → Run workflow**. Manual runs publish all `articles/*.html` files by default, or one file when `slug` is provided.
 
 The workflow does not delete WordPress posts when article files are removed.
 
@@ -58,7 +58,10 @@ Manual runs expose a status selector:
 - `preserve`: keep existing statuses and use `WP_NEW_POST_STATUS` for new posts.
 - `draft`, `pending`, `publish`: send that status for both created and updated posts.
 
-Manual runs also include `dry_run`, which validates and prints the resolved slug, title, and status without sending anything to WordPress.
+Manual runs also include these inputs:
+
+- `dry_run`: validates and prints the resolved slug, title, and status without sending anything to WordPress.
+- `slug`: optional article slug to publish exactly one HTML file, resolved as `articles/<slug>.html`. Leave it blank to publish every `articles/*.html` file. If the specified HTML file does not exist, the workflow stops with an explicit error instead of succeeding with no published article.
 
 ## Local validation
 

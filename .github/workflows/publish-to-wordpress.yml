@@ -24,6 +24,10 @@ on:
         required: true
         default: true
         type: boolean
+      slug:
+        description: '送信する記事スラッグ。空欄なら全HTML記事'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -50,12 +54,24 @@ jobs:
       - name: Detect changed article files
         id: changed
         shell: bash
+        env:
+          INPUT_SLUG: ${{ github.event.inputs.slug || '' }}
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "push" ]]; then
             git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'articles/*.html' 'articles/*.json' > /tmp/article-files.txt
           else
-            find articles -maxdepth 1 -type f \( -name '*.html' -o -name '*.json' \) | sort > /tmp/article-files.txt || true
+            slug="$INPUT_SLUG"
+            if [[ -n "$slug" ]]; then
+              file="articles/${slug}.html"
+              if [[ ! -f "$file" ]]; then
+                echo "::error::Specified article HTML file does not exist: $file"
+                exit 1
+              fi
+              printf '%s\n' "$file" > /tmp/article-files.txt
+            else
+              find articles -maxdepth 1 -type f -name '*.html' | sort > /tmp/article-files.txt || true
+            fi
           fi
           existing_html=()
           while IFS= read -r file; do
