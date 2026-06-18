@@ -1,4 +1,4 @@
-name: Codexでルアー記事を生成
+name: Codex-impplession
 
 'on':
   workflow_dispatch:
