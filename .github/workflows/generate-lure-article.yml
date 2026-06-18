@@ -1,7 +1,7 @@
 name: ルアー記事を自動生成
 run-name: ${{ inputs.product_name }} の記事を生成
 
-on:
+'on':
   workflow_dispatch:
     inputs:
       product_name:
@@ -20,11 +20,12 @@ on:
         description: 追加指示
         required: false
         type: string
+        default: ''
       create_pull_request:
         description: Pull Requestを作成する
         required: true
-        default: true
         type: boolean
+        default: true
 
 concurrency:
   group: codex-lure-article-${{ inputs.article_slug }}
@@ -73,9 +74,7 @@ jobs:
               raise SystemExit("product_name は1行・120文字以内で入力してください。")
 
           if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", slug):
-              raise SystemExit(
-                  "article_slug は半角英小文字・数字・ハイフンのみ、64文字以内で入力してください。"
-              )
+              raise SystemExit("article_slug は半角英小文字・数字・ハイフンのみ、64文字以内で入力してください。")
 
           parsed = urllib.parse.urlparse(official_url)
           if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -179,7 +178,7 @@ jobs:
           )
           PY
 
-        - name: Codexで記事を生成
+      - name: Codexで記事を生成
         id: codex
         uses: openai/codex-action@v1
         with:
@@ -208,7 +207,6 @@ jobs:
           text = raw_path.read_text(encoding="utf-8").replace("\r\n", "\n").strip()
           lines = text.splitlines()
 
-          # 全文がMarkdownコードフェンスで囲まれた場合だけ、安全に除去する。
           if len(lines) >= 2 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
               lines = lines[1:-1]
               text = "\n".join(lines).strip()
@@ -302,24 +300,9 @@ jobs:
               return text[start:end]
 
           checks = [
-              (
-                  f"## {product}のインプレ：良かった点",
-                  f"## {product}のインプレ：悪かった点",
-                  3,
-                  "良かった点",
-              ),
-              (
-                  f"## {product}のインプレ：悪かった点",
-                  f"## {product}の使い方",
-                  2,
-                  "悪かった点",
-              ),
-              (
-                  f"## {product}の使い方",
-                  f"## {product}のインプレまとめ",
-                  3,
-                  "使い方",
-              ),
+              (f"## {product}のインプレ：良かった点", f"## {product}のインプレ：悪かった点", 3, "良かった点"),
+              (f"## {product}のインプレ：悪かった点", f"## {product}の使い方", 2, "悪かった点"),
+              (f"## {product}の使い方", f"## {product}のインプレまとめ", 3, "使い方"),
           ]
 
           for start, end, minimum_h3, label in checks:
