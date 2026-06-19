@@ -114,7 +114,7 @@ jobs:
           related_keywords = os.environ.get("RELATED_KEYWORDS", "").strip()
           search_intent = os.environ.get("SEARCH_INTENT", "").strip() or f"{product}の良い点・悪い点・使い方・スペックを知り、購入するか判断したい"
           persona = os.environ.get("PERSONA", "").strip() or "シーバス用ルアーの購入で迷っている初心者〜中級者"
-          article_title = os.environ.get("ARTICLE_TITLE", "").strip() or f"{product}のインプレを徹底解説！良かった点・悪かった点・使い方まとめ"
+          article_title = f"{product}のインプレ・使い方を徹底解説"
           benchmark = os.environ.get("BENCHMARK", "").strip() or "検索上位の競合記事を参考にする"
           target_char_count = os.environ.get("TARGET_CHAR_COUNT", "").strip() or "5000"
           extra_notes = os.environ.get("EXTRA_NOTES", "").strip()
@@ -122,8 +122,8 @@ jobs:
           if not product or len(product) > 120 or "\n" in product or "\r" in product:
               raise SystemExit("product_name は1行・120文字以内で入力してください。")
 
-          if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", slug):
-              raise SystemExit("article_slug は半角英小文字・数字・ハイフンのみ、64文字以内で入力してください。")
+          if not re.fullmatch(r"[a-z0-9]+-[a-z0-9]+-impression", slug) or slug.count("-") != 2:
+              raise SystemExit("article_slug は新形式（^[a-z0-9]+-[a-z0-9]+-impression$、ハイフン2個）で入力してください。旧形式よりこのルールを優先します。")
 
           parsed = urllib.parse.urlparse(official_url)
           if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -166,14 +166,14 @@ jobs:
           prompt = f"""
           あなたは上場企業に勤める敏腕SEOライターです。
           釣りジャンルの記事を、読者の購入判断に役立つように作成してください。
-          次の商品についてWeb調査を行い、調査元と採用根拠を `research/{slug}-sources.md` に保存したうえで、WordPressブロックエディタへそのまま貼れるHTML本文だけを返してください。
+          次の商品についてWeb調査を行い、調査元と採用根拠を `research/{slug}-sources.md` に保存したうえで、`articles/{slug}.html`、`articles/{slug}.json`、`research/{slug}-sources.md` の3ファイルを同じスラッグで作成してください。WordPressブロックエディタへそのまま貼れるHTML本文だけを返してください。
 
           【変数】
           - キーワード: {keyword}
           - 関連キーワード: {related}
           - 検索意図: {search_intent}
           - ペルソナ: {persona}
-          - 記事タイトル: {article_title}
+          - WordPress投稿タイトル: {article_title}
           - ベンチマーク: {benchmark}
           - 文字数: {target_char_count}字前後
           - 商品名: {product}
@@ -200,7 +200,7 @@ jobs:
           - 最終回答として出力する内容はHTML本文のみです。前置き、作業報告、TODO、Markdown、コードフェンスは出力しないでください。
           - 調査元と採用根拠は、最終回答ではなく `research/{slug}-sources.md` へ保存してください。
           - 本文中に [1]、[2]、[1][3] のようなサイテーション番号を絶対に入れないでください。
-          - 情報源名、参考資料、出典一覧、URL一覧はHTML本文に出力しないでください。
+          - 情報源名、参考資料、出典一覧、URL一覧はHTML本文に出力しないでください。ただし、導入文1段落目の末尾にある商品名アンカー1件だけは公式商品ページURLをhref属性として許可します。
           - <h2>、<h3>、<p>、<ul>、<li>、<table>、<tbody>、<tr>、<td>、<strong>、<br>のみを中心に使ってください。
           - 段落には必ず<p>タグを使ってください。
           - 見出しは<h2>、小見出しは<h3>タグを使ってください。
@@ -253,8 +253,9 @@ jobs:
           【導入文】
           記事の冒頭は、空行を除いて必ず4つの<p>タグで構成してください。H1見出しは付けません。
           1つ目の<p>: 「特徴・評価」と噂の「全長mm（またはcm）」「重量g」の「{product}」
-            - 例: <p>引き抵抗が軽いと噂の70mm・13gの「{product}」</p>
-            - 体言止めにし、句点を付けず、末尾を必ず「{product}」にしてください。
+            - 例: <p>引き抵抗が軽いと噂の70mm・13gの<a href="{official_url}" target="_blank" rel="noopener noreferrer">「{product}」</a></p>
+            - 体言止めにし、句点を付けず、末尾を必ず公式商品ページURLへのリンクを設定した「{product}」にしてください。
+            - アンカーテキストはかぎ括弧込みで「{product}」とし、target="_blank" と rel="noopener noreferrer" を付けてください。
             - 全長と重量は公式情報で確認できた値だけを使ってください。
           2つ目の<p>: 対象商品で確認できた悪いインプレを1つだけ提示し、「本当に初心者には扱いにくいのでしょうか？」など、悪かった点まで読み進めたくなる問いで締めてください。
             - 例: <p>「操作方法が多く、最初は使い分けに迷いやすい」という悪いインプレもあります。本当に初心者には扱いにくいのでしょうか？</p>
@@ -309,6 +310,8 @@ jobs:
           - [1]、[2]、[1][3]のようなサイテーション番号がない。
           - Markdown見出しやMarkdown表がない。
           - すべての段落が<p>タグになっている。
+          - WordPress投稿タイトルは `articles/{slug}.json` のtitleへ `{product}のインプレ・使い方を徹底解説` と明示し、HTML本文にはH1を入れない。
+          - `articles/{slug}.json` のslugは `{slug}` と完全一致し、公式リンク検査用に `official_product_url` へ `{official_url}` を保存している。
           - H2は指定した5個だけで、すべて「{product}」から始まっている。
           - 導入文は4つの<p>タグで、2つ目の悪いインプレは1つだけであり、悪かった点H3と対応している。
           - 基本スペック表、公式説明の要約、カラーリストがある。
@@ -372,6 +375,16 @@ jobs:
 
           output = pathlib.Path("generated") / f"{slug}.html"
           output.write_text(text.strip() + "\n", encoding="utf-8")
+
+          metadata = {
+              "title": f"{os.environ['PRODUCT_NAME'].strip()}のインプレ・使い方を徹底解説",
+              "slug": slug,
+              "official_product_url": os.environ["OFFICIAL_URL"].strip(),
+              "comment_status": "closed",
+              "ping_status": "closed",
+          }
+          import json
+          (pathlib.Path("generated") / f"{slug}.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
           PY
 
       - name: HTML記事構成を自動検査
@@ -387,8 +400,28 @@ jobs:
           product = os.environ["PRODUCT_NAME"].strip()
           slug = os.environ["ARTICLE_SLUG"].strip()
           path = pathlib.Path("generated") / f"{slug}.html"
+          json_path = pathlib.Path("generated") / f"{slug}.json"
+          research_path = pathlib.Path("research") / f"{slug}-sources.md"
           text = path.read_text(encoding="utf-8")
           errors = []
+
+          if not re.fullmatch(r"[a-z0-9]+-[a-z0-9]+-impression", slug) or slug.count("-") != 2:
+              errors.append("スラッグが新形式（3語・ハイフン2個・末尾impression）と一致しません。")
+          import json
+          try:
+              metadata = json.loads(json_path.read_text(encoding="utf-8"))
+          except Exception as exc:
+              metadata = {}
+              errors.append(f"JSONメタデータを読み込めません: {exc}")
+          expected_title = f"{product}のインプレ・使い方を徹底解説"
+          if metadata.get("title") != expected_title:
+              errors.append("JSON titleが固定形式と一致しません。")
+          if metadata.get("slug") != slug:
+              errors.append("JSON slugがファイル名スラッグと一致しません。")
+          if metadata.get("official_product_url") != os.environ["OFFICIAL_URL"].strip():
+              errors.append("JSON official_product_urlが入力公式URLと一致しません。")
+          if re.search(r"<\s*h1\b", text, flags=re.IGNORECASE):
+              errors.append("HTML本文にH1を入れないでください。")
 
           if len(text.strip()) < 2500:
               errors.append("記事本文が短すぎます（2,500文字未満）。")
@@ -484,8 +517,13 @@ jobs:
           if re.search(r"<p>\s*文字数\s*[：:]\s*[\d,０-９，]+\s*字\s*</p>", text, flags=re.IGNORECASE):
               errors.append("記事末尾の文字数報告は出力しない設定です。")
 
-          if re.search(r"https?://|www\.", text, flags=re.IGNORECASE):
-              errors.append("公開HTMLにURLが含まれています。")
+          hrefs = re.findall(r"href=[\"']([^\"']+)[\"']", text, flags=re.IGNORECASE)
+          if hrefs != [os.environ["OFFICIAL_URL"].strip()]:
+              errors.append("公開HTMLのURLは導入文1段落目の商品名アンカーにある公式URL1件だけ許可します。")
+          text_without_href = re.sub(r"\s+href=[\"'][^\"']*[\"']", "", text, flags=re.IGNORECASE)
+          visible_text = re.sub(r"<[^>]+>", "", text_without_href)
+          if re.search(r"https?://|www\.", visible_text, flags=re.IGNORECASE):
+              errors.append("URL文字列が本文テキストとして表示されています。")
 
           insult_terms = [
               "全く釣れない",
@@ -541,7 +579,6 @@ jobs:
           if "参考資料" in text or "参照資料" in text or "出典" in text:
               errors.append("参考資料・参照資料・出典一覧は出力しない設定です。")
 
-          research_path = pathlib.Path("research") / f"{slug}-sources.md"
           if not research_path.exists() or not research_path.read_text(encoding="utf-8").strip():
               errors.append(f"調査元ファイル {research_path} が作成されていません。")
 
@@ -561,6 +598,7 @@ jobs:
           name: lure-html-article-${{ inputs.article_slug }}
           path: |
             generated/${{ inputs.article_slug }}.html
+            generated/${{ inputs.article_slug }}.json
             generated/article-raw.html
             research/${{ inputs.article_slug }}-sources.md
           if-no-files-found: warn
@@ -598,19 +636,22 @@ jobs:
           set -euo pipefail
 
           article_path="articles/${ARTICLE_SLUG}.html"
+          json_path="articles/${ARTICLE_SLUG}.json"
           research_path="research/${ARTICLE_SLUG}-sources.md"
           branch_name="codex/html-article-${ARTICLE_SLUG}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           mkdir -p articles research
           cp ".article-artifact/${ARTICLE_SLUG}.html" "$article_path"
+          cp ".article-artifact/${ARTICLE_SLUG}.json" "$json_path"
           cp ".article-artifact/${ARTICLE_SLUG}-sources.md" "$research_path"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch_name"
-          git add -- "$article_path" "$research_path"
+          git add -- "$article_path" "$json_path" "$research_path"
 
           echo "article_path=$article_path" >> "$GITHUB_OUTPUT"
+          echo "json_path=$json_path" >> "$GITHUB_OUTPUT"
           echo "research_path=$research_path" >> "$GITHUB_OUTPUT"
           echo "branch_name=$branch_name" >> "$GITHUB_OUTPUT"
 
@@ -629,6 +670,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ARTICLE_PATH: ${{ steps.commit.outputs.article_path }}
+          JSON_PATH: ${{ steps.commit.outputs.json_path }}
           RESEARCH_PATH: ${{ steps.commit.outputs.research_path }}
           BRANCH_NAME: ${{ steps.commit.outputs.branch_name }}
         shell: bash
@@ -641,6 +683,7 @@ jobs:
           CodexでWeb調査し、指定テンプレートに沿って「${PRODUCT_NAME}」のHTML記事を生成しました。
 
           - 記事保存先: \`${ARTICLE_PATH}\`
+          - 投稿メタデータ保存先: \`${JSON_PATH}\`
           - 調査元保存先: \`${RESEARCH_PATH}\`
           - WordPressブロックエディタ向けHTML形式です
           - 本文中の \`[1][3]\` 形式のサイテーション番号は削除しています

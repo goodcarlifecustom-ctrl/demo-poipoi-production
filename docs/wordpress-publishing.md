@@ -31,13 +31,15 @@ Optional repository variable:
 
 ## Article files
 
-Create an HTML file at `articles/<slug>.html`. The file stem becomes the WordPress post slug, and the full HTML file becomes the post content.
+Create an HTML file at `articles/<slug>.html`. For new product articles, also create `articles/<slug>.json` and `research/<slug>-sources.md` with the same slug. New product article slugs must match `^[a-z0-9]+-[a-z0-9]+-impression$` with exactly two hyphens; their WordPress title must be `<正式商品名>のインプレ・使い方を徹底解説`.
 
-You may add `articles/<slug>.json` with any of these fields:
+New product article JSON is required and must include `title`, `slug`, and `official_product_url`. Older articles may continue to use the legacy fallback behavior. Supported post fields are:
 
 ```json
 {
-  "title": "Product title",
+  "title": "SCHNEIDER 13のインプレ・使い方を徹底解説",
+  "slug": "schneider-13-impression",
+  "official_product_url": "https://example.com/product",
   "excerpt": "Short excerpt",
   "categories": [1, 2],
   "tags": [3, 4],
@@ -46,7 +48,7 @@ You may add `articles/<slug>.json` with any of these fields:
 }
 ```
 
-If the JSON file is missing or does not include `title`, the script uses the first `<h2>` in the HTML as the title. If no `<h2>` exists, it creates a readable title from the slug.
+For new-format `*-impression` articles, the script stops if JSON is missing, JSON `slug` differs from the HTML filename, JSON `title` does not use the fixed title suffix, an H1 exists, or the first intro paragraph does not end with exactly one official product link. For legacy articles, if the JSON file is missing or does not include `title`, the script uses the first `<h2>` in the HTML as the title. If no `<h2>` exists, it creates a readable title from the slug.
 
 ## Create and update behavior
 

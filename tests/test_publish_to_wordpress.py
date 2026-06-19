@@ -102,3 +102,80 @@ class PublishingSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class NewArticleRuleTests(unittest.TestCase):
+    def write_new_article(self, root: Path, slug: str = "schneider-13-impression", title: str = "SCHNEIDER 13のインプレ・使い方を徹底解説", url: str = "https://example.com/product") -> Path:
+        article_dir = root / "articles"
+        article_dir.mkdir(exist_ok=True)
+        html = article_dir / f"{slug}.html"
+        product = title.removesuffix(wp.TITLE_SUFFIX)
+        html.write_text(f'<p>13gの<a href="{url}" target="_blank" rel="noopener noreferrer">「{product}」</a></p><h2>{product}とは？基本スペック</h2>', encoding="utf-8")
+        html.with_suffix(".json").write_text('{"title":"' + title + '","slug":"' + slug + '","official_product_url":"' + url + '"}', encoding="utf-8")
+        return html
+
+    def test_slug_generation_examples(self):
+        cases = {
+            "SCHNEIDER 13": "schneider-13-impression",
+            "sobat 80": "sobat-80-impression",
+            "HONEY TRAP 70S KARUTORA": "honeytrap-70skarutora-impression",
+            "Rocket Bait 95 Heavy": "rocketbait-95heavy-impression",
+            "PUGACHEV'S COBRA": "pugachevs-cobra-impression",
+        }
+        for product, expected in cases.items():
+            self.assertEqual(wp.slug_from_product_name(product), expected)
+            self.assertRegex(expected, wp.NEW_ARTICLE_SLUG_RE)
+            self.assertEqual(expected.count("-"), 2)
+
+    def test_new_article_uses_json_title_and_slug(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_new_article(Path(tmp))
+            payload = wp.build_payload(html, "draft", "draft")
+        self.assertEqual(payload["title"], "SCHNEIDER 13のインプレ・使い方を徹底解説")
+        self.assertEqual(payload["slug"], "schneider-13-impression")
+
+    def test_missing_official_link_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_new_article(Path(tmp))
+            html.write_text('<p>13gの「SCHNEIDER 13」</p>', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exactly one official"):
+                wp.build_payload(html, "draft", "draft")
+
+    def test_different_official_link_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_new_article(Path(tmp))
+            html.write_text('<p>13gの<a href="https://evil.example" target="_blank" rel="noopener noreferrer">「SCHNEIDER 13」</a></p>', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "other than"):
+                wp.build_payload(html, "draft", "draft")
+
+    def test_second_external_link_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_new_article(Path(tmp))
+            html.write_text(html.read_text(encoding="utf-8") + '<p><a href="https://example.org">x</a></p>', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "other than"):
+                wp.build_payload(html, "draft", "draft")
+
+    def test_visible_url_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_new_article(Path(tmp))
+            html.write_text(html.read_text(encoding="utf-8") + '<p>https://example.com/product</p>', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "visible"):
+                wp.build_payload(html, "draft", "draft")
+
+    def test_json_title_mismatch_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_new_article(Path(tmp), title="SCHNEIDER 13の評判")
+            with self.assertRaisesRegex(ValueError, "JSON title"):
+                wp.build_payload(html, "draft", "draft")
+
+    def test_json_slug_mismatch_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_new_article(Path(tmp))
+            html.with_suffix(".json").write_text('{"title":"SCHNEIDER 13のインプレ・使い方を徹底解説","slug":"wrong-slug-impression","official_product_url":"https://example.com/product"}', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "JSON slug"):
+                wp.build_payload(html, "draft", "draft")
+
+    def test_three_or_more_hyphen_slug_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_new_article(Path(tmp), slug="honey-trap-70s-karutora-impression", title="HONEY TRAP 70S KARUTORAのインプレ・使い方を徹底解説")
+            with self.assertRaisesRegex(ValueError, "exactly two hyphens"):
+                wp.build_payload(html, "draft", "draft")

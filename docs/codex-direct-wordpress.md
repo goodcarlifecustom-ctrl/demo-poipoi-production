@@ -25,6 +25,9 @@ Use a dedicated WordPress user and a dedicated Application Password. Do not use 
 ## Publishing behavior
 
 - New product articles are always sent with `status=draft`.
+- New product articles must use `articles/<slug>.html`, `articles/<slug>.json`, and `research/<slug>-sources.md` where `<slug>` matches `^[a-z0-9]+-[a-z0-9]+-impression$` and has exactly two hyphens.
+- New product article JSON must provide the WordPress `title` as `<正式商品名>のインプレ・使い方を徹底解説`, the matching `slug`, and `official_product_url`; publishing uses the JSON title and slug.
+- The first intro paragraph must end with one official product-page link on `「正式商品名」`; raw visible URLs and all other public HTML URLs remain prohibited.
 - If a non-published post with the same slug already exists, it is updated instead of creating a duplicate.
 - If a post with the same slug is already `publish`, automation stops and does not update it or move it back to draft.
 - `research/<slug>-sources.md` is for validation and traceability only; it is never sent to WordPress.
@@ -35,7 +38,7 @@ Use a dedicated WordPress user and a dedicated Application Password. Do not use 
 After creating and validating `articles/<slug>.html` and `research/<slug>-sources.md`, run:
 
 ```bash
-python scripts/codex_publish_article.py sobat-80
+python scripts/codex_publish_article.py sobat-80-impression
 ```
 
 The command accepts either a slug or `articles/<slug>.html`, performs a local dry-run first, then sends only that HTML file to WordPress as a draft. Successful output contains only the send status, action, post ID, slug, draft status, and post URL.

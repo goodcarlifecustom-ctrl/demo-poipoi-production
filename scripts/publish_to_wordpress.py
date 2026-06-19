@@ -28,6 +28,9 @@ VALID_STATUSES = {"preserve", "draft", "pending", "publish"}
 PR_ALLOWED_FILE_RE = re.compile(r"^(articles/[^/]+\.(?:html|json)|research/[^/]+\.md)$")
 PR_ARTICLE_RE = re.compile(r"^articles/([^/]+)\.(html|json)$")
 PR_POSTABLE_STATUSES = {"added", "modified", "renamed", "changed"}
+NEW_ARTICLE_SLUG_RE = re.compile(r"^[a-z0-9]+-[a-z0-9]+-impression$")
+TITLE_SUFFIX = "のインプレ・使い方を徹底解説"
+METADATA_FIELDS = POST_FIELDS | {"slug", "official_product_url"}
 
 
 @dataclass(frozen=True)
@@ -115,7 +118,91 @@ def load_metadata(json_path: Path) -> dict:
         data = json.load(handle)
     if not isinstance(data, dict):
         raise ValueError(f"{json_path} must contain a JSON object")
-    return {key: data[key] for key in POST_FIELDS if key in data}
+    return {key: data[key] for key in METADATA_FIELDS if key in data}
+
+
+def is_new_article_slug(slug: str) -> bool:
+    return slug.endswith("-impression")
+
+
+def validate_new_article_slug(slug: str) -> None:
+    if not NEW_ARTICLE_SLUG_RE.fullmatch(slug) or slug.count("-") != 2:
+        raise ValueError("New-format article slug must match ^[a-z0-9]+-[a-z0-9]+-impression$ and contain exactly two hyphens")
+
+
+def slug_from_product_name(product_name: str) -> str:
+    """Return the approved 3-word impression slug for known product-name patterns."""
+    normalized = product_name.strip()
+    examples = {
+        "SCHNEIDER 13": "schneider-13-impression",
+        "sobat 80": "sobat-80-impression",
+        "HONEY TRAP 70S KARUTORA": "honeytrap-70skarutora-impression",
+        "Rocket Bait 95 Heavy": "rocketbait-95heavy-impression",
+        "PUGACHEV'S COBRA": "pugachevs-cobra-impression",
+        "PUGACHEV'S COBRA 60": "pugachevscobra-60-impression",
+    }
+    if normalized in examples:
+        return examples[normalized]
+    words = [re.sub(r"[^A-Za-z0-9]", "", part).lower() for part in normalized.split()]
+    words = [word for word in words if word]
+    if len(words) < 2:
+        raise ValueError("商品名から安全に3語スラッグを生成できません。記事生成前に確認してください。")
+    first = words[0] if len(words) == 2 else "".join(words[:-1])
+    second = words[1] if len(words) == 2 else words[-1]
+    slug = f"{first}-{second}-impression"
+    if not NEW_ARTICLE_SLUG_RE.fullmatch(slug):
+        raise ValueError("生成スラッグが新形式に一致しません。")
+    return slug
+
+
+def html_text_without_href_values(html_text: str) -> str:
+    return re.sub(r"\s+href=[\"'][^\"']*[\"']", "", html_text, flags=re.IGNORECASE)
+
+
+def validate_new_article_metadata_and_html(html_path: Path, html_text: str, metadata: dict) -> None:
+    slug = html_path.stem
+    json_path = html_path.with_suffix(".json")
+    if not json_path.exists():
+        raise ValueError(f"New-format article requires metadata JSON: {json_path}")
+    if metadata.get("slug") != slug:
+        raise ValueError(f"JSON slug must match HTML filename slug: {json_path}")
+    title = str(metadata.get("title", ""))
+    if not title.endswith(TITLE_SUFFIX) or title == TITLE_SUFFIX or title.endswith("。"):
+        raise ValueError(f"JSON title must be '<正式商品名>{TITLE_SUFFIX}' with no trailing punctuation")
+    product_name = title[: -len(TITLE_SUFFIX)]
+    if re.search(r"<\s*h1\b", html_text, flags=re.IGNORECASE):
+        raise ValueError("HTML body must not contain H1 tags")
+    official_url = str(metadata.get("official_product_url", ""))
+    if not official_url:
+        raise ValueError("New-format metadata JSON requires official_product_url for official-link validation")
+    expected_anchor = f"「{product_name}」"
+    first_p = re.search(r"<p[^>]*>(.*?)</p>", html_text, flags=re.IGNORECASE | re.DOTALL)
+    if not first_p:
+        raise ValueError("Intro first paragraph is missing")
+    first_p_html = first_p.group(1).strip()
+    anchors = re.findall(r"<a\b([^>]*)>(.*?)</a>", html_text, flags=re.IGNORECASE | re.DOTALL)
+    official_anchors = []
+    for attrs, body in anchors:
+        href_match = re.search(r"href=[\"']([^\"']+)[\"']", attrs, flags=re.IGNORECASE)
+        href = href_match.group(1) if href_match else ""
+        if href == official_url:
+            official_anchors.append((attrs, re.sub(r"<[^>]+>", "", body).strip()))
+        elif re.match(r"https?://", href):
+            raise ValueError("HTML contains an external link other than the official product URL")
+    if len(official_anchors) != 1:
+        raise ValueError("HTML must contain exactly one official product URL link")
+    attrs, anchor_text = official_anchors[0]
+    if anchor_text != expected_anchor:
+        raise ValueError("Official product link anchor text must be the quoted official product name")
+    if not re.search(r"target=[\"']_blank[\"']", attrs, flags=re.IGNORECASE):
+        raise ValueError("Official product link requires target=\"_blank\"")
+    if not re.search(r"rel=[\"']noopener noreferrer[\"']", attrs, flags=re.IGNORECASE):
+        raise ValueError("Official product link requires rel=\"noopener noreferrer\"")
+    if not re.search(rf"<a\b[^>]*href=[\"']{re.escape(official_url)}[\"'][^>]*>{re.escape(expected_anchor)}</a>\s*$", first_p_html, flags=re.IGNORECASE | re.DOTALL):
+        raise ValueError("Intro first paragraph must end with the official product-name link")
+    visible_text = re.sub(r"<[^>]+>", "", html_text_without_href_values(html_text))
+    if re.search(r"https?://", visible_text, flags=re.IGNORECASE):
+        raise ValueError("URL strings must not be visible in HTML text")
 
 
 def validate_html(html_path: Path, html_text: str) -> None:
@@ -132,8 +219,11 @@ def build_payload(html_path: Path, new_status: str, status_override: str) -> dic
     html_text = html_path.read_text(encoding="utf-8")
     validate_html(html_path, html_text)
     metadata = load_metadata(html_path.with_suffix(".json"))
+    if is_new_article_slug(slug):
+        validate_new_article_slug(slug)
+        validate_new_article_metadata_and_html(html_path, html_text, metadata)
     payload = {"slug": slug, "content": html_text}
-    payload.update(metadata)
+    payload.update({key: value for key, value in metadata.items() if key in POST_FIELDS or key == "slug"})
     if "title" not in payload or not str(payload["title"]).strip():
         product = first_h2(html_text) or slug.replace("-", " ").replace("_", " ").strip().title()
         payload["title"] = product
