@@ -1,0 +1,6 @@
+
+.wp-draft-locks/
+*.tmp
+.env
+
+__pycache__/

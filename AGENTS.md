@@ -31,3 +31,16 @@ For new product articles, prefer these permanent rules even when a product-speci
 - The first intro paragraph must end with a single official product-page link whose anchor text is `「正式商品名」`, including the Japanese brackets. Use the official product URL supplied by the product prompt, `target="_blank"`, and `rel="noopener noreferrer"`.
 - Public HTML must not show raw URLs and must not include source lists or reference links. The only URL exception is the one official product-page href in the first intro paragraph, and it must exactly match the prompt's official product URL.
 - Before dry-run or WordPress sending, validate the fixed title, slug regex and hyphen count, matching HTML/JSON/research filenames, JSON syntax/title/slug, first-paragraph official link, lack of extra URLs, absence of H1, and existing SEO/HTML/SWELL/usage-impression/bad-impression/source-hidden rules.
+
+
+## Staged WordPress draft workflow for all article tasks
+
+For every future article generation task, after creating the article HTML and metadata, run the repository standard completion command:
+
+```bash
+npm run article:complete -- --slug <slug>
+```
+
+Do not report an article as complete unless this command succeeds in normal mode. It runs tests, local article validation, staged WordPress draft creation, content update, REST API read-back verification, and final metadata/result report updates. Use `--local-only` or `--no-wordpress` only when the task is explicitly local development/testing; normal article work must not silently skip WordPress. WordPress status is always fixed to `draft`; do not add publish, future, pending, private, trash, or inherit posting flows.
+
+The staged draft flow creates a minimal draft first and then updates only `content`. It must check duplicate slugs/titles and existing `wordpress_draft_id`, avoid unconditional repost after timeouts, and update `metadata.json`, `wp-result.md`, and `check-report.md` only after final REST read-back verification succeeds.
