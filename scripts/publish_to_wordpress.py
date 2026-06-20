@@ -45,6 +45,13 @@ class PublishedPostRefused(RuntimeError):
     pass
 
 
+class DuplicateSlugPosts(RuntimeError):
+    pass
+
+
+WP_SEARCH_STATUSES = ("draft", "pending", "private", "future", "publish")
+
+
 class H2Parser(html.parser.HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -155,6 +162,45 @@ def slug_from_product_name(product_name: str) -> str:
     return slug
 
 
+
+
+def paragraph_bodies(html_text: str) -> list[str]:
+    return re.findall(r"<p[^>]*>(.*?)</p>", html_text, flags=re.IGNORECASE | re.DOTALL)
+
+
+def visible_text(fragment: str) -> str:
+    return re.sub(r"<[^>]+>", "", fragment).strip()
+
+
+def validate_intro_paragraphs(html_text: str) -> None:
+    paragraphs = paragraph_bodies(html_text)
+    if len(paragraphs) < 2:
+        raise ValueError("Intro requires first and second paragraphs")
+    first_p_html = paragraphs[0].strip()
+    second_p_html = paragraphs[1].strip()
+    first_sentence_match = re.match(r"(?P<first>.*?</a>。)(?P<second>.+)$", first_p_html, flags=re.IGNORECASE | re.DOTALL)
+    if not first_sentence_match:
+        raise ValueError("Intro first paragraph first sentence must end with </a>。")
+    first_sentence = first_sentence_match.group("first").strip()
+    second_sentence = first_sentence_match.group("second").strip()
+    if not first_sentence.endswith("</a>。"):
+        raise ValueError("Intro first paragraph first sentence must end with </a>。")
+    if not re.search(r"(?:です|ます)。\s*$", visible_text(second_sentence)):
+        raise ValueError("Intro first paragraph second sentence must end with です。 or ます。")
+    if len(re.findall(r"。", visible_text(first_p_html))) != 2:
+        raise ValueError("Intro first paragraph must contain exactly two sentences")
+    forbidden = ["評判", "悪いインプレ", "本当なのでしょうか", "でしょうか？"]
+    first_visible = visible_text(first_p_html)
+    found = [word for word in forbidden if word in first_visible]
+    if found:
+        raise ValueError("Intro first paragraph contains prohibited bad-impression or question wording: " + ", ".join(found))
+    if second_p_html.count("悪いインプレ") != 1:
+        raise ValueError("Intro second paragraph must contain exactly one bad impression")
+    if not re.search(r"[？?]\s*$", visible_text(second_p_html)):
+        raise ValueError("Intro second paragraph must end with a question")
+    if re.search(r"<a\b[^>]*\bhref=[\"']https?://", second_p_html, flags=re.IGNORECASE):
+        raise ValueError("Intro second paragraph must not contain external links")
+
 def html_text_without_href_values(html_text: str) -> str:
     return re.sub(r"\s+href=[\"'][^\"']*[\"']", "", html_text, flags=re.IGNORECASE)
 
@@ -176,10 +222,11 @@ def validate_new_article_metadata_and_html(html_path: Path, html_text: str, meta
     if not official_url:
         raise ValueError("New-format metadata JSON requires official_product_url for official-link validation")
     expected_anchor = f"「{product_name}」"
-    first_p = re.search(r"<p[^>]*>(.*?)</p>", html_text, flags=re.IGNORECASE | re.DOTALL)
-    if not first_p:
+    paragraphs = paragraph_bodies(html_text)
+    if not paragraphs:
         raise ValueError("Intro first paragraph is missing")
-    first_p_html = first_p.group(1).strip()
+    first_p_html = paragraphs[0].strip()
+    validate_intro_paragraphs(html_text)
     anchors = re.findall(r"<a\b([^>]*)>(.*?)</a>", html_text, flags=re.IGNORECASE | re.DOTALL)
     official_anchors = []
     for attrs, body in anchors:
@@ -198,8 +245,8 @@ def validate_new_article_metadata_and_html(html_path: Path, html_text: str, meta
         raise ValueError("Official product link requires target=\"_blank\"")
     if not re.search(r"rel=[\"']noopener noreferrer[\"']", attrs, flags=re.IGNORECASE):
         raise ValueError("Official product link requires rel=\"noopener noreferrer\"")
-    if not re.search(rf"<a\b[^>]*href=[\"']{re.escape(official_url)}[\"'][^>]*>{re.escape(expected_anchor)}</a>\s*$", first_p_html, flags=re.IGNORECASE | re.DOTALL):
-        raise ValueError("Intro first paragraph must end with the official product-name link")
+    if not re.match(rf".*<a\b[^>]*href=[\"']{re.escape(official_url)}[\"'][^>]*>{re.escape(expected_anchor)}</a>。.+$", first_p_html, flags=re.IGNORECASE | re.DOTALL):
+        raise ValueError("Intro first paragraph first sentence must end with the official product-name link")
     visible_text = re.sub(r"<[^>]+>", "", html_text_without_href_values(html_text))
     if re.search(r"https?://", visible_text, flags=re.IGNORECASE):
         raise ValueError("URL strings must not be visible in HTML text")
@@ -235,12 +282,27 @@ def build_payload(html_path: Path, new_status: str, status_override: str) -> dic
 
 
 def find_existing(base_url: str, auth_header: str, slug: str) -> dict | None:
-    url = f"{base_url}/wp-json/wp/v2/posts?{urllib.parse.urlencode({'slug': slug, 'context': 'edit'})}"
-    result = request_json(url, "GET", auth_header)
-    if isinstance(result, list) and result:
-        first = result[0]
-        return first if isinstance(first, dict) else None
-    return None
+    matches_by_id: dict[object, dict] = {}
+    idless_matches: list[dict] = []
+    for status in WP_SEARCH_STATUSES:
+        params = {"slug": slug, "context": "edit", "status": status, "per_page": "100"}
+        url = f"{base_url}/wp-json/wp/v2/posts?{urllib.parse.urlencode(params)}"
+        result = request_json(url, "GET", auth_header)
+        if not isinstance(result, list):
+            continue
+        for item in result:
+            if not isinstance(item, dict):
+                continue
+            post_id = item.get("id")
+            if post_id is None:
+                idless_matches.append(item)
+            else:
+                matches_by_id.setdefault(post_id, item)
+    matches = list(matches_by_id.values()) + idless_matches
+    if len(matches) > 1:
+        post_ids = [str(item.get("id", "unknown")) for item in matches]
+        raise DuplicateSlugPosts(f"Multiple WordPress posts found for slug={slug}: post IDs={', '.join(post_ids)}")
+    return matches[0] if matches else None
 
 
 def publish(html_path: Path, args: argparse.Namespace, auth_header: str | None) -> PublishResult | None:

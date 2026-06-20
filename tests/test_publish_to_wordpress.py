@@ -16,10 +16,17 @@ class BaseUrlNormalizationTests(unittest.TestCase):
         with patch.object(wp, "request_json", return_value=[]) as request_json:
             wp.find_existing(base_url, "Basic token", "example-slug")
 
-        url = request_json.call_args.args[0]
+        first_url = request_json.call_args_list[0].args[0]
         self.assertEqual(base_url, "https://example.com")
-        self.assertTrue(url.startswith("https://example.com/wp-json/wp/v2/posts?"))
-        self.assertFalse(url.startswith("https://example.com//wp-json/wp/v2"))
+        self.assertTrue(first_url.startswith("https://example.com/wp-json/wp/v2/posts?"))
+        self.assertFalse(first_url.startswith("https://example.com//wp-json/wp/v2"))
+        self.assertEqual(request_json.call_count, len(wp.WP_SEARCH_STATUSES))
+        for call, status in zip(request_json.call_args_list, wp.WP_SEARCH_STATUSES):
+            url = call.args[0]
+            query = wp.urllib.parse.parse_qs(wp.urllib.parse.urlparse(url).query)
+            self.assertEqual(query["slug"], ["example-slug"])
+            self.assertEqual(query["context"], ["edit"])
+            self.assertEqual(query["status"], [status])
 
     def test_keeps_https_validation(self):
         with self.assertRaisesRegex(ValueError, "https://"):
@@ -63,6 +70,26 @@ class PublishingSafetyTests(unittest.TestCase):
             payload = wp.build_payload(html, "draft", "draft")
             self.assertEqual(payload["status"], "draft")
 
+    def write_legacy_article(self, root: Path, slug: str = "slug") -> Path:
+        article_dir = root / "articles"
+        article_dir.mkdir()
+        html = article_dir / f"{slug}.html"
+        html.write_text("<h2>Title</h2>", encoding="utf-8")
+        return html
+
+    def publish_args(self, status: str = "draft", refuse_published_update: bool = True) -> argparse.Namespace:
+        return argparse.Namespace(new_post_status="draft", status=status, dry_run=False, refuse_published_update=refuse_published_update, base_url="https://example.com")
+
+    def search_results(self, *, draft=None, pending=None, private=None, future=None, publish=None):
+        by_status = {
+            "draft": draft or [],
+            "pending": pending or [],
+            "private": private or [],
+            "future": future or [],
+            "publish": publish or [],
+        }
+        return [by_status[status] for status in wp.WP_SEARCH_STATUSES]
+
     def test_published_wordpress_post_update_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             article_dir = Path(tmp) / "articles"
@@ -87,6 +114,53 @@ class PublishingSafetyTests(unittest.TestCase):
             self.assertNotIn("super-secret-token", output.getvalue())
             self.assertNotIn("Basic", output.getvalue())
 
+    def test_existing_draft_is_updated_with_same_post_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_legacy_article(Path(tmp))
+            side_effect = self.search_results(draft=[{"id": 10, "status": "draft"}]) + [{"id": 10, "status": "draft"}]
+            with patch.object(wp, "request_json", side_effect=side_effect) as request_json:
+                result = wp.publish(html, self.publish_args(), "Basic token")
+        self.assertEqual(result.action, "updated")
+        self.assertEqual(result.post_id, 10)
+        self.assertIn("/wp-json/wp/v2/posts/10", request_json.call_args_list[-1].args[0])
+
+    def test_existing_pending_is_detected_and_updated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_legacy_article(Path(tmp))
+            side_effect = self.search_results(pending=[{"id": 11, "status": "pending"}]) + [{"id": 11, "status": "draft"}]
+            with patch.object(wp, "request_json", side_effect=side_effect) as request_json:
+                result = wp.publish(html, self.publish_args(), "Basic token")
+        self.assertEqual(result.action, "updated")
+        self.assertEqual(result.post_id, 11)
+        self.assertIn("/wp-json/wp/v2/posts/11", request_json.call_args_list[-1].args[0])
+
+    def test_duplicate_slug_posts_stop_without_create_or_update(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_legacy_article(Path(tmp))
+            side_effect = self.search_results(draft=[{"id": 10, "status": "draft"}], pending=[{"id": 11, "status": "pending"}])
+            with patch.object(wp, "request_json", side_effect=side_effect) as request_json, self.assertRaisesRegex(wp.DuplicateSlugPosts, "10, 11"):
+                wp.publish(html, self.publish_args(), "Basic token")
+        self.assertEqual(request_json.call_count, len(wp.WP_SEARCH_STATUSES))
+
+    def test_existing_publish_is_detected_and_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_legacy_article(Path(tmp))
+            side_effect = self.search_results(publish=[{"id": 13, "status": "publish"}])
+            with patch.object(wp, "request_json", side_effect=side_effect) as request_json, self.assertRaisesRegex(wp.PublishedPostRefused, "公開済み記事"):
+                wp.publish(html, self.publish_args(), "Basic token")
+        self.assertEqual(request_json.call_count, len(wp.WP_SEARCH_STATUSES))
+
+    def test_no_existing_post_creates_new_draft(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_legacy_article(Path(tmp))
+            side_effect = self.search_results() + [{"id": 12, "status": "draft"}]
+            with patch.object(wp, "request_json", side_effect=side_effect) as request_json:
+                result = wp.publish(html, self.publish_args(), "Basic token")
+        self.assertEqual(result.action, "created")
+        self.assertEqual(result.post_id, 12)
+        self.assertEqual(request_json.call_args_list[-1].args[1], "POST")
+        self.assertTrue(request_json.call_args_list[-1].args[0].endswith("/wp-json/wp/v2/posts"))
+
     def test_preserve_status_for_existing_main_push_still_omits_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             article_dir = Path(tmp) / "articles"
@@ -109,7 +183,12 @@ class NewArticleRuleTests(unittest.TestCase):
         article_dir.mkdir(exist_ok=True)
         html = article_dir / f"{slug}.html"
         product = title.removesuffix(wp.TITLE_SUFFIX)
-        html.write_text(f'<p>13gの<a href="{url}" target="_blank" rel="noopener noreferrer">「{product}」</a></p><h2>{product}とは？基本スペック</h2>', encoding="utf-8")
+        html.write_text(
+            f'<p>全長59mm・重量13gのシンキングタイプで、軽い巻き心地が長所の<a href="{url}" target="_blank" rel="noopener noreferrer">「{product}」</a>。レンジ30cmから河川や干潟で使いやすい鉄板バイブレーションです。</p>'
+            '<p>「根掛かりには注意が必要」という悪いインプレもあります。本当に初心者でも扱いやすいのでしょうか？</p>'
+            f'<h2>{product}とは？基本スペック</h2>',
+            encoding="utf-8",
+        )
         html.with_suffix(".json").write_text('{"title":"' + title + '","slug":"' + slug + '","official_product_url":"' + url + '"}', encoding="utf-8")
         return html
 
@@ -136,14 +215,36 @@ class NewArticleRuleTests(unittest.TestCase):
     def test_missing_official_link_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             html = self.write_new_article(Path(tmp))
-            html.write_text('<p>13gの「SCHNEIDER 13」</p>', encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "exactly one official"):
+            html.write_text('<p>全長59mm・重量13gのシンキングタイプで、軽い巻き心地が長所の「SCHNEIDER 13」。レンジ30cmから河川や干潟で使いやすい鉄板バイブレーションです。</p><p>「根掛かりには注意が必要」という悪いインプレもあります。本当に初心者でも扱いやすいのでしょうか？</p>', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "first sentence"):
+                wp.build_payload(html, "draft", "draft")
+
+    def test_intro_first_paragraph_bad_impression_question_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_new_article(Path(tmp))
+            html.write_text(
+                '<p>全長59mm・重量13gのシンキングタイプで、軽い巻き心地が長所の<a href="https://example.com/product" target="_blank" rel="noopener noreferrer">「SCHNEIDER 13」</a>。根掛かりには気をつけてという評判があるルアーです。</p>'
+                '<p>「根掛かりには注意が必要」という悪いインプレもあります。本当に初心者でも扱いやすいのでしょうか？</p>',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "prohibited"):
+                wp.build_payload(html, "draft", "draft")
+
+    def test_intro_second_paragraph_question_and_no_external_link_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            html = self.write_new_article(Path(tmp))
+            html.write_text(
+                '<p>全長59mm・重量13gのシンキングタイプで、軽い巻き心地が長所の<a href="https://example.com/product" target="_blank" rel="noopener noreferrer">「SCHNEIDER 13」</a>。レンジ30cmから河川や干潟で使いやすい鉄板バイブレーションです。</p>'
+                '<p><a href="https://example.net">「根掛かりには注意が必要」</a>という悪いインプレもあります。本当に初心者でも扱いやすいのでしょうか？</p>',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "must not contain external links"):
                 wp.build_payload(html, "draft", "draft")
 
     def test_different_official_link_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             html = self.write_new_article(Path(tmp))
-            html.write_text('<p>13gの<a href="https://evil.example" target="_blank" rel="noopener noreferrer">「SCHNEIDER 13」</a></p>', encoding="utf-8")
+            html.write_text('<p>全長59mm・重量13gのシンキングタイプで、軽い巻き心地が長所の<a href="https://evil.example" target="_blank" rel="noopener noreferrer">「SCHNEIDER 13」</a>。レンジ30cmから河川や干潟で使いやすい鉄板バイブレーションです。</p><p>「根掛かりには注意が必要」という悪いインプレもあります。本当に初心者でも扱いやすいのでしょうか？</p>', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "other than"):
                 wp.build_payload(html, "draft", "draft")
 
