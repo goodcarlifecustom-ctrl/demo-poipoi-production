@@ -1,0 +1,16 @@
+{
+  "title": "記事タイトル",
+  "slug": "example-seo-article",
+  "target_media": "",
+  "article_type": "SEO記事",
+  "main_keyword": "",
+  "related_keywords": [],
+  "target_reader": "",
+  "article_goal": "",
+  "char_count": {
+    "min": 3000,
+    "target": 4000,
+    "max": 5000
+  },
+  "wordpress_draft": false
+}

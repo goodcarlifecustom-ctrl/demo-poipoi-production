@@ -2,6 +2,7 @@
   "scripts": {
     "test": "python -m pytest -q && node --test tests/post-wp-draft.test.mjs",
     "check": "node scripts/check-article.mjs",
+    "finalize": "node scripts/finalize-article.mjs",
     "post": "node scripts/post-wp-draft.mjs",
     "article:complete": "node scripts/article-complete.mjs"
   },

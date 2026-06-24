@@ -49,3 +49,12 @@ npm run article:complete -- --slug <slug> --local-only
 WordPress投稿は `scripts/post-wp-draft.mjs` が担当し、ステータスは常に `draft` に固定します。投稿は、最小HTMLコメントだけの下書き作成後に完成本文を `content` のみで更新する2段階方式です。重複スラッグ・重複タイトル・既存 `wordpress_draft_id` をREST APIで確認し、最終的に `context=edit` で再取得してタイトル、スラッグ、draftステータス、本文SHA-256を検証します。成功後だけ `metadata.json`、`wp-result.md`、`check-report.md` を実値で更新します。
 
 認証情報、Authorizationヘッダー、Cookie、プロキシURL、`.env` の内容はログや結果ファイルへ記録しません。
+
+
+## 新規SEO記事のGutenberg下書き安全ルール
+
+新規SEO記事は `articles/<slug>/article.html` と `articles/<slug>/metadata.json` のディレクトリ形式で作成し、本文はfront matterなしのGutenbergブロックマークアップにします。`articles/_template` は雛形専用で、誤投稿防止のため `wordpress_draft: false` です。実記事作成時は `_template` をコピーした後、仮タイトル・仮slug・仮キーワードを必ず置換し、WordPressへ下書き投稿する場合だけ `wordpress_draft: true` に変更します。
+
+ユーザー向けの投稿設定は `wordpress_draft` です。`post_to_wp` は後方互換用の同義フィールドであり、新規テンプレートや新規ドキュメントでは案内しません。両方を指定した場合は同じboolean値でなければエラーになります。`status` はユーザー必須入力ではなく、ワークフローが常に `draft` を設定します。`publish`、`private`、`pending` などdraft以外は拒否されます。
+
+文字数設定の正規フィールドは `char_count.min` / `char_count.target` / `char_count.max` です。既存互換として `word_count` も読み取れますが、このリポジトリでは日本語の可視本文文字数を意味します。計測時はfront matter、Gutenbergブロックコメント、HTMLタグ、属性URL、script、style、JSON-LD、作業用HTMLコメント、空白を除外し、HTMLエンティティを表示文字へ戻して `Array.from(visibleText).length` でUnicodeコードポイント単位の文字数を確認します。
